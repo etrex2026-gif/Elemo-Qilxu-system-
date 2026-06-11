@@ -1,0 +1,124 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- SHARED HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/adminAccounts/$(request.auth.uid)) ||
+        request.auth.token.email == 'nahomdebebe971@gmail.com'
+      );
+    }
+
+    function isTeacher() {
+      return isSignedIn() && exists(/databases/$(database)/documents/teachers/$(request.auth.uid));
+    }
+
+    // --- COLLECTION RULES ---
+
+    // 1. Admin Accounts
+    match /adminAccounts/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // 2. School Config
+    match /config/school {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 3. Teachers
+    match /teachers/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+      allow delete: if isAdmin();
+    }
+
+    // 4. Grades
+    match /grades/{gradeId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 5. Subjects & Assignments
+    match /subjects/{subjectId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    
+    match /assignments/{assignmentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // 6. Students
+    match /students/{studentId} {
+      // Admins and Teachers can read student lists. Students can't.
+      allow list: if isAdmin() || isTeacher();
+      allow get: if isAdmin() || isTeacher();
+      allow write: if isAdmin();
+    }
+
+    // 7. Marks
+    match /marks/{markId} {
+      // Only Teachers and Admins can manage marks
+      // Scale optimization: use resource.data for list checks
+      allow list: if isAdmin() || isTeacher();
+      allow get: if isAdmin() || isTeacher();
+      
+      allow create: if (isAdmin() || isTeacher()) &&
+          incoming().semester1 >= 0 && incoming().semester1 <= 100 &&
+          incoming().semester2 >= 0 && incoming().semester2 <= 100;
+          
+      allow update: if (isAdmin() || isTeacher()) &&
+          incoming().semester1 >= 0 && incoming().semester1 <= 100 &&
+          incoming().semester2 >= 0 && incoming().semester2 <= 100 &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['semester1', 'semester2', 'updatedAt', 'teacherId']);
+          
+      allow delete: if isAdmin();
+    }
+
+    // 8. Published Results (THE SEARCH HUB)
+    match /publishedResults/{verificationId} {
+      // get is allowed by anyone who knows the verificationId (from QR or Portal)
+      allow get: if true; 
+      allow list: if isAdmin(); // Only admin can list publications
+      allow write: if isAdmin();
+    }
+
+    // 9. Analytics Cache
+    match /analyticsCache/{cacheId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // 10. Audit Logs
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn(); // Allow authenticated users to log actions
+    }
+  }
+}
